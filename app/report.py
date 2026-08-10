@@ -1,15 +1,41 @@
 """
 診断結果をPDFレポート化するモジュール。
 
-WeasyPrintでHTML文字列をそのままPDFに変換する。
-テンプレートエンジンは使わず、f-stringで組み立てる（依存を増やさないため）。
+reportlabで直接PDFを組み立てる(pure Python、システムライブラリ不要)。
+日本語はreportlab組み込みのCIDフォント(HeiseiKakuGo-W5)を使うため、
+フォントファイルの同梱や外部インストールも不要。
+WeasyPrintはRenderの標準Python環境だとPango/Cairo等が無くて動かないため、
+この方式に切り替えている。
 """
+import io
 from datetime import datetime
 from typing import Optional
 
-from weasyprint import HTML
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+)
 
 from app.database import DiagnosisResult
+
+import os
+
+_FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "NotoSansJP.ttf")
+pdfmetrics.registerFont(TTFont("NotoSansJP", _FONT_PATH))
+FONT = "NotoSansJP"
+# <b>タグ等で太字指定されても同じフォントにフォールバックさせる(専用の太字フォントは同梱していないため)
+pdfmetrics.registerFontFamily(FONT, normal=FONT, bold=FONT, italic=FONT, boldItalic=FONT)
+
+GOLD = colors.HexColor("#A98548")
+WARN = colors.HexColor("#B85B4C")
+INK = colors.HexColor("#1B1D24")
+MUTED = colors.HexColor("#5B5F6B")
+LINE = colors.HexColor("#E4E1D8")
 
 SEO_LABELS = {
     "title": "title タグ",
@@ -17,7 +43,6 @@ SEO_LABELS = {
     "h1": "h1 タグ",
     "images": "画像の alt 属性",
 }
-
 SECURITY_LABELS = {
     "https": "HTTPS化",
     "hsts": "Strict-Transport-Security",
@@ -25,165 +50,47 @@ SECURITY_LABELS = {
     "x_frame_options": "X-Frame-Options",
 }
 
+styles = {
+    "eyebrow": ParagraphStyle("eyebrow", fontName=FONT, fontSize=8, textColor=GOLD, spaceAfter=6),
+    "title": ParagraphStyle("title", fontName=FONT, fontSize=20, textColor=INK, spaceAfter=14, leading=26),
+    "meta": ParagraphStyle("meta", fontName=FONT, fontSize=9, textColor=MUTED, leading=14),
+    "heading": ParagraphStyle("heading", fontName=FONT, fontSize=12, textColor=INK, spaceAfter=8),
+    "body": ParagraphStyle("body", fontName=FONT, fontSize=9.5, textColor=INK, leading=14),
+    "note": ParagraphStyle("note", fontName=FONT, fontSize=8, textColor=MUTED, leading=12),
+    "footer": ParagraphStyle("footer", fontName=FONT, fontSize=8, textColor=MUTED, leading=12),
+}
+
 
 def render_report_pdf(row: DiagnosisResult, previous: Optional[DiagnosisResult] = None) -> bytes:
-    html = _build_html(row, previous)
-    return HTML(string=html).write_pdf()
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=28 * mm, bottomMargin=22 * mm, leftMargin=20 * mm, rightMargin=20 * mm,
+    )
 
-
-def _build_html(row: DiagnosisResult, previous: Optional[DiagnosisResult]) -> str:
     details = row.details_json or {}
     seo_details = details.get("seo", {})
     security_details = details.get("security", {})
-
     checked_at = row.created_at.strftime("%Y年%m月%d日 %H:%M")
 
-    scores_html = "".join(
-        _score_row(label, score, _diff(score, prev))
-        for label, score, prev in [
-            ("パフォーマンス", row.performance_score, previous.performance_score if previous else None),
-            ("SEO", row.seo_score, previous.seo_score if previous else None),
-            ("セキュリティ", row.security_score, previous.security_score if previous else None),
-        ]
-    )
+    elements = [
+        Paragraph("SATOLAB. / SITE CHECK REPORT", styles["eyebrow"]),
+        Paragraph("Webサイト診断レポート", styles["title"]),
+        Paragraph(f"対象URL: {row.url}<br/>診断日時: {checked_at}", styles["meta"]),
+        Spacer(1, 14),
+        _score_table(row, previous),
+        Spacer(1, 20),
+        _findings_columns(seo_details, security_details),
+        Spacer(1, 24),
+        Paragraph(
+            "このレポートは自動診断ツール「Satolab. Site Check」により生成されました。"
+            "診断内容は基本項目の簡易チェックであり、詳細な監査を代替するものではありません。",
+            styles["footer"],
+        ),
+    ]
 
-    seo_rows = "".join(_finding_row(SEO_LABELS[k], seo_details.get(k)) for k in SEO_LABELS if seo_details.get(k))
-    security_rows = "".join(
-        _finding_row(SECURITY_LABELS[k], security_details.get(k)) for k in SECURITY_LABELS if security_details.get(k)
-    )
-
-    return f"""
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<style>
-  @page {{
-    size: A4;
-    margin: 28mm 20mm;
-    @bottom-center {{
-      content: "Satolab. Site Check Report";
-      font-family: 'Noto Sans JP', sans-serif;
-      font-size: 8pt;
-      color: #9CA0AC;
-    }}
-  }}
-  body {{
-    font-family: 'Noto Sans JP', sans-serif;
-    color: #1B1D24;
-    font-size: 10.5pt;
-    line-height: 1.7;
-  }}
-  h1 {{
-    font-size: 20pt;
-    margin: 0 0 6pt;
-    color: #1B1D24;
-  }}
-  .eyebrow {{
-    font-family: monospace;
-    font-size: 8pt;
-    letter-spacing: 0.1em;
-    color: #C9A15A;
-    margin-bottom: 6pt;
-  }}
-  .meta {{
-    font-size: 9pt;
-    color: #5B5F6B;
-    margin-bottom: 26pt;
-    border-bottom: 1pt solid #E4E1D8;
-    padding-bottom: 14pt;
-  }}
-  table {{
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 26pt;
-  }}
-  th {{
-    text-align: left;
-    font-size: 8pt;
-    letter-spacing: 0.06em;
-    color: #5B5F6B;
-    border-bottom: 1pt solid #1B1D24;
-    padding-bottom: 6pt;
-    text-transform: uppercase;
-  }}
-  td {{
-    padding: 9pt 0;
-    border-bottom: 0.5pt solid #E4E1D8;
-    font-size: 10.5pt;
-  }}
-  .score-value {{ font-weight: 700; font-size: 13pt; }}
-  .diff-up {{ color: #A98548; }}
-  .diff-down {{ color: #B85B4C; }}
-  .diff-flat {{ color: #9CA0AC; }}
-  h2 {{
-    font-size: 12pt;
-    margin: 0 0 10pt;
-    padding-top: 4pt;
-    color: #1B1D24;
-  }}
-  .finding {{
-    display: flex;
-    padding: 7pt 0;
-    border-bottom: 0.5pt solid #EFEDE6;
-    font-size: 9.5pt;
-  }}
-  .finding .ok {{ color: #A98548; font-weight: 700; margin-right: 8pt; }}
-  .finding .warn {{ color: #B85B4C; font-weight: 700; margin-right: 8pt; }}
-  .finding .label {{ font-weight: 500; }}
-  .finding .note {{ color: #5B5F6B; display: block; font-size: 8.5pt; margin-top: 2pt; }}
-  .columns {{
-    display: flex;
-    gap: 24pt;
-  }}
-  .column {{ flex: 1; }}
-  footer.note {{
-    margin-top: 30pt;
-    font-size: 8pt;
-    color: #9CA0AC;
-  }}
-</style>
-</head>
-<body>
-  <div class="eyebrow">SATOLAB. / SITE CHECK REPORT</div>
-  <h1>Webサイト診断レポート</h1>
-  <div class="meta">
-    対象URL: {row.url}<br>
-    診断日時: {checked_at}
-  </div>
-
-  <table>
-    <thead>
-      <tr><th>項目</th><th>スコア</th><th>前回との差</th></tr>
-    </thead>
-    <tbody>
-      {scores_html}
-    </tbody>
-  </table>
-
-  <div class="columns">
-    <div class="column">
-      <h2>SEO</h2>
-      {seo_rows or '<p style="color:#9CA0AC; font-size:9pt;">項目なし</p>'}
-    </div>
-    <div class="column">
-      <h2>セキュリティ</h2>
-      {security_rows or '<p style="color:#9CA0AC; font-size:9pt;">項目なし</p>'}
-    </div>
-  </div>
-
-  <footer class="note">
-    このレポートは自動診断ツール「Satolab. Site Check」により生成されました。診断内容は基本項目の簡易チェックであり、詳細な監査を代替するものではありません。
-  </footer>
-</body>
-</html>
-"""
-
-
-def _score_row(label: str, score: Optional[int], diff: Optional[int]) -> str:
-    score_text = f"{score} / 100" if score is not None else "未計測"
-    diff_html = _diff_html(diff)
-    return f"<tr><td>{label}</td><td class='score-value'>{score_text}</td><td>{diff_html}</td></tr>"
+    doc.build(elements)
+    return buffer.getvalue()
 
 
 def _diff(current: Optional[int], previous: Optional[int]) -> Optional[int]:
@@ -192,24 +99,71 @@ def _diff(current: Optional[int], previous: Optional[int]) -> Optional[int]:
     return current - previous
 
 
-def _diff_html(diff: Optional[int]) -> str:
+def _diff_text(diff: Optional[int]) -> str:
     if diff is None:
-        return "<span style='color:#9CA0AC;'>—</span>"
+        return "—"
     if diff == 0:
-        return "<span class='diff-flat'>±0</span>"
-    if diff > 0:
-        return f"<span class='diff-up'>▲ {diff}</span>"
-    return f"<span class='diff-down'>▼ {abs(diff)}</span>"
+        return "±0"
+    return f"▲ {diff}" if diff > 0 else f"▼ {abs(diff)}"
 
 
-def _finding_row(label: str, item: Optional[dict]) -> str:
-    if not item:
-        return ""
-    icon_class = "ok" if item.get("ok") else "warn"
-    icon = "✓" if item.get("ok") else "!"
-    note = item.get("note")
-    note_html = f"<span class='note'>{note}</span>" if note else ""
-    return (
-        f"<div class='finding'><span class='{icon_class}'>{icon}</span>"
-        f"<span><span class='label'>{label}</span>{note_html}</span></div>"
-    )
+def _score_table(row: DiagnosisResult, previous: Optional[DiagnosisResult]) -> Table:
+    rows_data = [
+        ("パフォーマンス", row.performance_score, previous.performance_score if previous else None),
+        ("SEO", row.seo_score, previous.seo_score if previous else None),
+        ("セキュリティ", row.security_score, previous.security_score if previous else None),
+    ]
+    header = [
+        Paragraph("項目", styles["note"]),
+        Paragraph("スコア", styles["note"]),
+        Paragraph("前回との差", styles["note"]),
+    ]
+    body = []
+    for label, score, prev in rows_data:
+        score_text = f"{score} / 100" if score is not None else "未計測"
+        body.append([
+            Paragraph(label, styles["body"]),
+            Paragraph(f"<b>{score_text}</b>", styles["body"]),
+            Paragraph(_diff_text(_diff(score, prev)), styles["note"]),
+        ])
+
+    table = Table([header] + body, colWidths=[70 * mm, 50 * mm, 50 * mm])
+    table.setStyle(TableStyle([
+        ("LINEBELOW", (0, 0), (-1, 0), 1, INK),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.5, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return table
+
+
+def _findings_columns(seo_details: dict, security_details: dict) -> Table:
+    left = [Paragraph("SEO", styles["heading"])] + _findings_flowables(SEO_LABELS, seo_details)
+    right = [Paragraph("セキュリティ", styles["heading"])] + _findings_flowables(SECURITY_LABELS, security_details)
+
+    table = Table([[left, right]], colWidths=[85 * mm, 85 * mm])
+    table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (0, 0), 0),
+        ("RIGHTPADDING", (1, 0), (1, 0), 0),
+    ]))
+    return table
+
+
+def _findings_flowables(labels: dict, data: dict) -> list:
+    flowables = []
+    for key, label in labels.items():
+        item = data.get(key)
+        if not item:
+            continue
+        mark = "○" if item.get("ok") else "×"
+        color = "#A98548" if item.get("ok") else "#B85B4C"
+        text = f'<font color="{color}">{mark}</font>&nbsp;&nbsp;{label}'
+        flowables.append(Paragraph(text, styles["body"]))
+        note = item.get("note")
+        if note:
+            flowables.append(Paragraph(note, styles["note"]))
+        flowables.append(Spacer(1, 6))
+    if not flowables:
+        flowables.append(Paragraph("項目なし", styles["note"]))
+    return flowables
