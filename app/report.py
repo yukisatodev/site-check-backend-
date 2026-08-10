@@ -80,6 +80,17 @@ def render_report_pdf(row: DiagnosisResult, previous: Optional[DiagnosisResult] 
         Spacer(1, 14),
         _score_table(row, previous),
         Spacer(1, 20),
+    ]
+
+    recommendations = _collect_suggestions(seo_details, security_details)
+    if recommendations:
+        elements.append(Paragraph("改善提案", styles["heading"]))
+        for i, s in enumerate(recommendations, start=1):
+            elements.append(Paragraph(f"{i}. {s}", styles["body"]))
+            elements.append(Spacer(1, 6))
+        elements.append(Spacer(1, 14))
+
+    elements += [
         _findings_columns(seo_details, security_details),
         Spacer(1, 24),
         Paragraph(
@@ -148,6 +159,15 @@ def _findings_columns(seo_details: dict, security_details: dict) -> Table:
         ("RIGHTPADDING", (1, 0), (1, 0), 0),
     ]))
     return table
+
+
+def _collect_suggestions(seo_details: dict, security_details: dict) -> list:
+    suggestions = []
+    for data in (seo_details, security_details):
+        for item in data.values():
+            if item and item.get("suggestion"):
+                suggestions.append(item["suggestion"])
+    return suggestions
 
 
 def _findings_flowables(labels: dict, data: dict) -> list:
