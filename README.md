@@ -1,43 +1,39 @@
-# Site Check — Backend (FastAPI)
+# Nedaka. — Backend (FastAPI)
 
-Webサイト診断ツール「Site Check」のバックエンドAPIです。
-URLを受け取り、SEO・セキュリティ・パフォーマンス（PageSpeed Insights連携時）を診断し、
-結果を保存・PDFレポート化します。
+睡眠記録を株価チャートに見立てて可視化するアプリ「Nedaka.（寝高）」のバックエンドAPIです。
 
-- フロントエンド: [site-check-frontend](https://github.com/yukisatodev/site-check-frontend-)
-- 公開URL（フロントエンド経由で利用）: https://effulgent-dodol-5d27d4.netlify.app/
-- 制作の背景・経緯: [ポートフォリオサイト内の紹介ページ](https://yukisatodev.github.io/)
+- フロントエンド: [nedaka-frontend](https://github.com/yukisatodev/nedaka-frontend)
+- デモ（ログイン不要）: https://gregarious-pony-811702.netlify.app/demo
 
 ## 作った背景
 
-フリーランスとして企業のDX推進・業務改善を支援する中で、「提案するだけでなく、自分の手で仕組みを形にできるようになりたい」という思いが強くなり、その最初の実践としてこのツールを作りました。
+Site Checkに続く3つ目の制作物として、「本格的なユーザー認証」と「独自のデータ可視化ロジック」を持つプロダクトを作りたいと考えて着手しました。
 
-Webサイト診断ツールというテーマは、これまで建設・不動産会社向けに自社Webサイトの構築を担当してきた経験と直結しています。企業のサイトが抱えがちな基本的なSEO・セキュリティ上の課題を、URLを入れるだけで自動的に洗い出し、単なる指摘で終わらせず「何をどう直せばいいか」まで返すことを目指しました。
+睡眠記録という地味になりがちなテーマを、株式相場のメタファー（ローソク足・移動平均線・アナリストコメント）で表現することで、単なるデータ可視化の実装だけでなく、「ドメインロジックを自分で設計する」経験を積むことを意識しています。
 
-バックエンドをPython/FastAPIで組んだのは、これまでフロントエンド寄りの学習が中心だったため、意識的にバックエンド・クラウド領域の実装経験を積むためです。実際にRenderへデプロイする過程では、Pythonのバージョン差異、フォルダ構成、PDF生成ライブラリがサーバー環境で動かない、といった「ローカルでは気づかない」問題に何度も直面しました。それを一つずつ切り分けて解決していったプロセス自体が、このプロジェクトで一番の学びになっています。
+## 仕組み
+
+各日の記録は、前日のスコア（終値）を起点に、目標睡眠時間との差と中途覚醒回数によって増減する「株価」に変換されます。
+
+- **Open（始値）**: 前日のClose
+- **Close（終値）**: 睡眠時間・中途覚醒から計算したその日のスコア
+- **High/Low（高値・安値）**: その日の値動きの振れ幅
+- **MA7 / MA30**: 直近7日・30日の移動平均線
+- **アナリストコメント**: 直近の平均と、その前の期間の平均を比較し、「強気相場」「弱気相場」「もみ合い」を自動判定
 
 ## エンドポイント
 
-- `POST /api/diagnose` — URLを診断し、前回結果との差分つきで返す
-- `GET /api/report/{result_id}` — 診断結果をPDFでダウンロード
-- `GET /api/history/{url}` — 指定URLの診断履歴を取得
+- `POST /api/auth/register` / `POST /api/auth/login` — JWT認証によるアカウント登録・ログイン
+- `POST /api/entries` — 睡眠記録の登録・更新（同じ日付ならupsert）
+- `GET /api/entries` — 全期間のローソク足データ・移動平均・アナリストコメント
+- `GET /api/report` — 決算レポートPDFのダウンロード
+- `GET /api/demo` / `GET /api/demo/report` — ログイン不要のサンプルデータ（デモ用）
 
-## 診断項目と改善提案
+## 使用技術
 
-- **SEO**: title タグ / meta description / h1 タグ / 画像の alt 属性
-- **セキュリティ**: HTTPS化 / Strict-Transport-Security / X-Content-Type-Options / X-Frame-Options
-- **パフォーマンス**: Google PageSpeed Insights API（`PAGESPEED_API_KEY`環境変数を設定した場合のみ計測）
+FastAPI / SQLAlchemy / SQLite / python-jose（JWT） / passlib（bcrypt） / reportlab
 
-いずれの項目も、問題があった場合は「なぜ問題か」「どう直せばいいか」を含む改善提案文を返します。単なるチェックツールで終わらせず、次のアクションにつながる出力を意識しました。
-
-## 技術選定の理由
-
-| 技術 | 採用理由 |
-|---|---|
-| FastAPI | 型安全なリクエスト/レスポンス定義と、`/docs`でのAPIドキュメント自動生成が開発効率に直結するため |
-| SQLAlchemy + SQLite | まずシンプルな構成で確実に動かすことを優先。`DATABASE_URL`環境変数を差し替えるだけで、Turso等のクラウドDBにも移行できる設計にしてある |
-| BeautifulSoup | 取得したHTMLからSEO関連タグ(title・meta description・h1・alt属性)を解析するために使用 |
-| reportlab | 当初はWeasyPrintでPDFを生成していたが、Renderの標準Python環境にはPango/Cairo等のシステムライブラリが無く動作しなかったため、pure PythonのreportLabに切り替え。日本語フォント(Noto Sans JP)は必要な文字だけをサブセット化して埋め込み、軽量かつ確実に日本語が表示されるようにした |
+PDFの日本語表示には、Site Checkと同じくNoto Sans JPを必要な文字だけサブセット化して埋め込む手法を使っています。
 
 ## ローカルで動かす
 
@@ -47,10 +43,3 @@ uvicorn app.main:app --reload
 ```
 
 `http://127.0.0.1:8000/docs` でAPIを直接確認できます。
-パフォーマンス計測をしたい場合は、環境変数`PAGESPEED_API_KEY`にGoogle PageSpeed Insights APIキーを設定してください（未設定でもSEO・セキュリティ診断は動作します）。
-
-## 今後やりたいこと
-
-- 診断項目の追加（robots.txt / sitemap.xml の有無など）
-- 履歴データをもとにしたスコア推移グラフ
-- クラウドDB(Turso等)への移行
