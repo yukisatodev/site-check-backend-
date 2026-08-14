@@ -1,45 +1,129 @@
-# Nedaka. — Backend (FastAPI)
+# Site Check — Backend
 
-睡眠記録を株価チャートに見立てて可視化するアプリ「Nedaka.（寝高）」のバックエンドAPIです。
+URLを1つ受け取り、SEO・セキュリティ・パフォーマンスの基本項目を無料で診断して返すAPIです。
+[フロントエンド](https://github.com/yukisatodev/site-check-frontend-)と対になっています。
 
-- フロントエンド: [nedaka-frontend](https://github.com/yukisatodev/nedaka-frontend)
-- デモ（ログイン不要）: https://gregarious-pony-811702.netlify.app/demo
+- 公開URL: https://effulgent-dodol-5d27d4.netlify.app/
+- フロントエンド: [site-check-frontend](https://github.com/yukisatodev/site-check-frontend-)
+- 設計判断の詳細: [site-check-DECISIONS.md](site-check-DECISIONS.md)
 
-## 作った背景
+---
 
-Site Checkに続く3つ目の制作物として、「本格的なユーザー認証」と「独自のデータ可視化ロジック」を持つプロダクトを作りたいと考えて着手しました。
+## 1. 背景・課題
 
-睡眠記録という地味になりがちなテーマを、株式相場のメタファー（ローソク足・移動平均線・アナリストコメント）で表現することで、単なるデータ可視化の実装だけでなく、「ドメインロジックを自分で設計する」経験を積むことを意識しています。
+企業のDX推進・Web制作支援の実務を通じて、「サイトを作って終わり」ではなく「公開後も健全な状態を保てているか」を継続的に確認できる仕組みが求められる場面を何度も見てきました。有償のSEO/セキュリティ診断ツールは多くありますが、
 
-## 仕組み
+- 個人開発の検証段階では費用をかけづらい
+- 診断結果だけ出て、次に何をすべきかまでは教えてくれないものが多い
+- 一度診断して終わりで、改善の推移を追えない
 
-各日の記録は、前日のスコア（終値）を起点に、目標睡眠時間との差と中途覚醒回数によって増減する「株価」に変換されます。
+という課題があると考え、「無料・改善提案つき・履歴比較つき」を満たす自分用の診断ツールとして着手しました。
 
-- **Open（始値）**: 前日のClose
-- **Close（終値）**: 睡眠時間・中途覚醒から計算したその日のスコア
-- **High/Low（高値・安値）**: その日の値動きの振れ幅
-- **MA7 / MA30**: 直近7日・30日の移動平均線
-- **アナリストコメント**: 直近の平均と、その前の期間の平均を比較し、「強気相場」「弱気相場」「もみ合い」を自動判定
+## 2. 要件定義
 
-## エンドポイント
+### 2.1 想定ユーザー
 
-- `POST /api/auth/register` / `POST /api/auth/login` — JWT認証によるアカウント登録・ログイン
-- `POST /api/entries` — 睡眠記録の登録・更新（同じ日付ならupsert）
-- `GET /api/entries` — 全期間のローソク足データ・移動平均・アナリストコメント
-- `GET /api/report` — 決算レポートPDFのダウンロード
-- `GET /api/demo` / `GET /api/demo/report` — ログイン不要のサンプルデータ（デモ用）
+- 自分のサイト・クライアントのサイトを、公開後も定期的にセルフチェックしたい個人開発者・小規模事業者
+- 初回商談前に、相手企業のサイトの現状を無料で把握したい制作会社の営業担当
 
-## 使用技術
+### 2.2 機能要件
 
-FastAPI / SQLAlchemy / SQLite / python-jose（JWT） / passlib（bcrypt） / reportlab
+| ID | 要件 | 対応状況 |
+|---|---|---|
+| F-1 | URLを入力するだけで診断を実行できる | ✅ |
+| F-2 | SEOの基本項目（title / meta description / h1 / img alt）を診断する | ✅ |
+| F-3 | セキュリティの基本項目（HTTPS / HSTS / X-Content-Type-Options / X-Frame-Options）を診断する | ✅ |
+| F-4 | パフォーマンススコアを取得する（Google PageSpeed Insights連携時） | ✅（APIキー未設定時は「未計測」） |
+| F-5 | 同じURLを再診断した際、前回結果との差分を表示する | ✅ |
+| F-6 | 過去の診断履歴を一覧で取得できる | ✅ |
+| F-7 | 診断結果をPDFレポートとしてダウンロードできる | ✅ |
+| F-8 | 項目ごとに、問題がある場合は具体的な改善提案を返す | ✅ |
 
-PDFの日本語表示には、Site Checkと同じくNoto Sans JPを必要な文字だけサブセット化して埋め込む手法を使っています。
+### 2.3 非機能要件
 
-## ローカルで動かす
+| 区分 | 内容 |
+|---|---|
+| 可用性 | 個人開発の無料枠運用のため、常時100%稼働は保証しない（Renderの無料インスタンスはアイドル時にスリープする） |
+| セキュリティ | パスワード等の機密情報は扱わない（認証機能を持たない）。CORSはオープン設定だが、書き込み対象は診断結果のみで、外部からの任意書き込みリスクは低い |
+| 拡張性 | 診断項目を`diagnostics.py`に関数として追加していくだけで拡張できる構成にしている |
+| 保守性 | 診断ロジック（`diagnostics.py`）、DBアクセス（`database.py`）、レポート生成（`report.py`）、ルーティング（`main.py`）を責務ごとに分離している |
+
+## 3. 診断ロジック（採点基準）
+
+### SEO（各25点、満点100点）
+
+| 項目 | 内容 |
+|---|---|
+| title | `<title>`タグの有無 |
+| meta description | `<meta name="description">`の有無 |
+| h1 | `<h1>`が過不足なく1つだけ存在するか |
+| img alt | 全`<img>`のうち、`alt`属性が設定されている割合 |
+
+### セキュリティ（HTTPS 40点、その他各20点、満点100点）
+
+| 項目 | 内容 |
+|---|---|
+| HTTPS | URLが`https://`で始まっているか |
+| HSTS | `Strict-Transport-Security`ヘッダーの有無 |
+| X-Content-Type-Options | `nosniff`が設定されているか |
+| X-Frame-Options | ヘッダーの有無（クリックジャッキング対策） |
+
+### パフォーマンス（0〜100点、任意）
+
+Google PageSpeed Insights API（モバイル基準）のLighthouseスコアをそのまま利用。APIキーを環境変数`PAGESPEED_API_KEY`に設定した場合のみ計測し、未設定時は`null`を返す（フロント側で「未計測」と表示）。
+
+## 4. データ設計
+
+```
+diagnosis_results
+├─ id               INTEGER PRIMARY KEY
+├─ url              STRING (index)
+├─ created_at       DATETIME (index)
+├─ performance_score INTEGER (nullable)
+├─ seo_score        INTEGER
+├─ security_score   INTEGER
+└─ details_json     JSON   -- 項目ごとのok/note/suggestionを保持
+```
+
+同一URLでも診断のたびに新しい行を追加する（上書きしない）ため、そのまま履歴・推移として扱える。
+
+## 5. API仕様
+
+| Method | Path | 概要 |
+|---|---|---|
+| POST | `/api/diagnose` | URLを診断し、結果をDBに保存して返す。同一URLの前回結果があれば差分(`diff`)も返す |
+| GET | `/api/history/{url}` | 指定URLの過去の診断結果を最大20件、新しい順で返す |
+| GET | `/api/report/{result_id}` | 指定した診断結果のPDFレポートを生成して返す |
+
+リクエスト/レスポンスの詳細なスキーマは`app/main.py`のPydanticモデル（`DiagnoseRequest` / `DiagnoseResponse`）を参照。
+
+## 6. 技術選定
+
+| 技術 | 採用理由 |
+|---|---|
+| FastAPI | Pydanticによる型安全なリクエスト/レスポンス定義と、自動生成される`/docs`（Swagger UI）で開発効率を優先 |
+| SQLAlchemy + SQLite | まずローカルで完結させ、`DATABASE_URL`を差し替えるだけでPostgres等クラウドDBに移行できる構成にした |
+| BeautifulSoup | HTML解析はscraping用途で実績のあるライブラリに任せ、診断ロジックの実装に集中 |
+| reportlab | PDFレポート生成。日本語表示のため、Noto Sans JPを必要な文字だけサブセット化して埋め込んでいる |
+
+## 7. セットアップ
 
 ```bash
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-`http://127.0.0.1:8000/docs` でAPIを直接確認できます。
+`http://127.0.0.1:8000/docs` でSwagger UIからAPIを直接試せる。
+
+環境変数（任意）:
+
+```
+PAGESPEED_API_KEY=xxxx   # 未設定でもSEO/セキュリティ診断は動作する
+DATABASE_URL=sqlite:///./diagnostics.db  # 省略時のデフォルト
+```
+
+## 8. 今後の課題
+
+- パフォーマンス計測をPageSpeed Insights依存から、より軽量な自前計測（Lighthouse CI等）へ拡張
+- 診断項目の追加（構造化データ、OGP、robots.txt/sitemap.xmlの有無など）
+- 定期診断（cronでの自動再診断とアラート通知）
