@@ -7,6 +7,12 @@ URLを1つ受け取り、SEO・セキュリティ・パフォーマンスの基�
 - フロントエンド: [site-check-frontend](https://github.com/yukisatodev/site-check-frontend-)
 - 設計判断の詳細: [site-check-DECISIONS.md](site-check-DECISIONS.md)
 
+![Site Check トップ画面](./docs/screenshot-hero.png)
+
+このAPIが返す診断結果は、フロントエンドで以下のように表示されます（スコア・前回比較・改善提案・チェックリスト）。
+
+![Site Check 診断結果画面](./docs/screenshot-results.png)
+
 ---
 
 ## 1. 背景・課題
